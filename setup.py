@@ -8,7 +8,11 @@ setup(
         "numpy",
         "scipy",
         "networkx",
-        "scikit-learn"
+        "scikit-learn",
+        "pandas",
+        "matplotlib",
+        "seaborn",
+        "statannotations"
     ],
     author="Nikita Smirnov",
     # author_email="your.email@example.com",
