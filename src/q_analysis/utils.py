@@ -20,7 +20,6 @@ import numpy as np
 from scipy.sparse import csr_array
 import networkx as nx
 from typing import Iterator
-from tqdm import tqdm
 from q_analysis.simplicial_complex import IncidenceSimplicialComplex, VECTORS
 
 def efficient_laplacian(A):
@@ -43,7 +42,7 @@ def adj_matrices_to_q_analysis_vectors(adj_matrices: np.ndarray, max_order=None,
         IncidenceSimplicialComplex
             .from_adjacency_matrix(adj)
             .q_analysis_vectors()
-        for adj in tqdm(adj_matrices)
+        for adj in adj_matrices
     ]
     
     return pad_structure_vectors(structure_vectors_list, max_order, fill_value)

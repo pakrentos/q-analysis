@@ -13,21 +13,19 @@ pip install q-analysis
 ## Package Structure
 
 ```
-q-analysis/
-│
-├── q_analysis/
-│   ├── __init__.py
-│   ├── simplicial_complex.py
-│   ├── stat.py
-│   ├── transformers.py
-│   ├── utils.py
-│   ├── viz.py
-│   ├── connected_components.py
-│   └── examples/
-│       └── scale_free_configurational.py
-├── README.md
-├── setup.py
-└── requirements.txt
+q_analysis/
+├── __init__.py
+├── simplicial_complex.py
+├── stat.py
+├── transformers.py
+├── utils.py
+├── viz.py
+├── connected_components.py
+└── examples/
+    └── scale_free_configurational.py
+README.md
+pyproject.toml
+requirements.txt
 ```
 
 ## Usage

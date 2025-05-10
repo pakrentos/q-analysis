@@ -1,0 +1,13 @@
+[package]
+name = "q-analysis-rust-extension"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+name = "q_analysis"
+crate-type = ["cdylib"]
+
+[dependencies]
+rayon = "1.8"
+lru = "0.12"
+pyo3 = { version = "0.21", features = ["extension-module"] }
