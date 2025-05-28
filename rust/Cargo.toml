@@ -11,3 +11,5 @@ crate-type = ["cdylib"]
 rayon = "1.8"
 lru = "0.12"
 pyo3 = { version = "0.21", features = ["extension-module"] }
+petgraph = "0.8.1"
+hashbrown = "0.15.3"

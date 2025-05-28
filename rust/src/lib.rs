@@ -1,55 +1,51 @@
-use std::collections::{HashSet, VecDeque};
-// use lru::LruCache; // Removed
-// use rayon::ThreadPoolBuilder; // Removed
+use hashbrown::hash_set::HashSet;
+use std::collections::VecDeque;
 use std::num::NonZeroUsize;
 
 // PyO3 imports
 use pyo3::prelude::*;
 use pyo3::types::{PyList, PySet};
 
-// Type aliases for clarity
+// Petgraph imports for persistence
+use petgraph::algo;
+use petgraph::graph::{Graph, NodeIndex, UnGraph};
+use std::collections::{BTreeSet, HashMap};
+use utils::compare_f64_nan_first;
+use std::time::Instant;
+mod utils;
+
 type VertexId = usize;
 type Simplex = HashSet<VertexId>;
 type SimplexIndex = usize;
 type SimplexDimension = isize;
 
-// type CacheKey = (SimplexIndex, SimplexIndex); // Removed
-// type SharedFaceDimensionCache = LruCache<CacheKey, SimplexDimension>; // Removed
+type ComponentVertices = BTreeSet<VertexId>; // Representation of vertices in a component
+type CanonicalComponentId = (usize, ComponentVertices); // (q_level, vertices)
+type PersistenceEntry = ((usize, Vec<VertexId>), f64, f64); // ((q, sorted_vertices), birth_threshold, death_threshold)
 
-/// Calculates the dimension of a single simplex.
-/// dim(simplex) = |simplex| - 1
 fn calculate_simplex_dimension(simplex: &Simplex) -> SimplexDimension {
     if simplex.is_empty() {
-        -1 // Dimension of an empty simplex
+        -1
     } else {
         simplex.len() as SimplexDimension - 1
     }
 }
 
-/// Gets the dimension of the shared face between two simplices.
-/// Uses an LRU cache to store results of this computation.
-/// The `q_for_context` parameter helps in early exit if simplices are too small for the current q-level.
 fn get_shared_face_dimension(
     s_idx1: SimplexIndex,
     s_idx2: SimplexIndex,
     simplices_ref: &[Simplex],
     simplex_dims_ref: &[SimplexDimension],
     q_for_context: usize, // The q-level being currently processed
-    // cache_mutex: &Arc<Mutex<SharedFaceDimensionCache>>, // Removed
 ) -> SimplexDimension {
     // Early exit: if either simplex's dimension is less than the current q,
     // they cannot be q-near or part of a q-chain at this q-level.
-    if simplex_dims_ref[s_idx1] < q_for_context as SimplexDimension || 
-       simplex_dims_ref[s_idx2] < q_for_context as SimplexDimension {
+    if simplex_dims_ref[s_idx1] < q_for_context as SimplexDimension
+        || simplex_dims_ref[s_idx2] < q_for_context as SimplexDimension
+    {
         return -1; // Indicates they cannot be q-near at this q_for_context
     }
 
-    // Removed cache logic
-    // let key = (s_idx1.min(s_idx2), s_idx1.max(s_idx2));
-    // let mut cache_guard = cache_mutex.lock().unwrap();
-    // if let Some(shared_dim) = cache_guard.get(&key) {
-    //     return *shared_dim;
-    // }
 
     // Calculate it directly
     let simplex1 = &simplices_ref[s_idx1];
@@ -57,12 +53,11 @@ fn get_shared_face_dimension(
     let shared_vertices_count = simplex1.intersection(simplex2).count();
 
     let shared_face_dim = if shared_vertices_count == 0 {
-        -1 // No shared vertices means no shared face
+        -1
     } else {
         shared_vertices_count as SimplexDimension - 1
     };
 
-    // cache_guard.put(key, shared_face_dim); // Removed
     shared_face_dim
 }
 
@@ -89,8 +84,10 @@ fn find_components_and_queue_further_work(
         return;
     }
 
-    let mut visited_in_scope: HashSet<SimplexIndex> = HashSet::with_capacity(eligible_indices.len());
-    let mut component_storage: HashSet<SimplexIndex> = HashSet::with_capacity(eligible_indices.len());
+    let mut visited_in_scope: HashSet<SimplexIndex> =
+        HashSet::with_capacity(eligible_indices.len());
+    let mut component_storage: HashSet<SimplexIndex> =
+        HashSet::with_capacity(eligible_indices.len());
     let mut stack_storage: Vec<SimplexIndex> = vec![0 as SimplexIndex; eligible_indices.len()];
 
     for &start_idx in &eligible_indices {
@@ -102,15 +99,17 @@ fn find_components_and_queue_further_work(
         let mut stack_top: usize = 0;
         let mut min_shared_dim_active_in_component: SimplexDimension = std::isize::MAX;
 
-        if stack_top < stack_storage.len() { // Initial push
+        if stack_top < stack_storage.len() {
+            // Initial push
             stack_storage[stack_top] = start_idx;
             stack_top += 1;
         }
-        
+
         visited_in_scope.insert(start_idx);
         component_storage.insert(start_idx);
 
-        while stack_top > 0 { // DFS
+        while stack_top > 0 {
+            // DFS
             stack_top -= 1;
             let current_s_idx = stack_storage[stack_top];
 
@@ -130,8 +129,9 @@ fn find_components_and_queue_further_work(
                 if shared_dim >= current_q as SimplexDimension {
                     visited_in_scope.insert(neighbor_idx);
                     component_storage.insert(neighbor_idx);
-                    min_shared_dim_active_in_component = min_shared_dim_active_in_component.min(shared_dim);
-                    
+                    min_shared_dim_active_in_component =
+                        min_shared_dim_active_in_component.min(shared_dim);
+
                     if stack_top < stack_storage.len() {
                         stack_storage[stack_top] = neighbor_idx;
                         stack_top += 1;
@@ -146,7 +146,7 @@ fn find_components_and_queue_further_work(
                 all_simplex_dims[simplex_idx]
             } else {
                 if min_shared_dim_active_in_component == std::isize::MAX {
-                     current_q as SimplexDimension 
+                    current_q as SimplexDimension
                 } else {
                     min_shared_dim_active_in_component
                 }
@@ -157,19 +157,28 @@ fn find_components_and_queue_further_work(
 
             if end_q_for_results >= start_q_for_results {
                 for q_isize in start_q_for_results..=end_q_for_results {
-                    if q_isize < 0 { continue; }
+                    if q_isize < 0 {
+                        continue;
+                    }
                     let q_usize = q_isize as usize;
                     if results.len() <= q_usize {
                         results.resize_with(q_usize + 1, Vec::new);
                     }
-                    results[q_usize].push(component_storage.iter().cloned().collect::<HashSet<SimplexIndex>>()); 
+                    results[q_usize].push(
+                        component_storage
+                            .iter()
+                            .cloned()
+                            .collect::<HashSet<SimplexIndex>>(),
+                    );
                 }
             }
 
             let next_q_to_explore_isize = max_q_this_component_satisfies + 1;
             if next_q_to_explore_isize <= max_overall_dim && next_q_to_explore_isize >= 0 {
                 let next_q_to_explore_usize = next_q_to_explore_isize as usize;
-                let next_scope_for_recursion: Vec<SimplexIndex> = component_storage.iter().cloned()
+                let next_scope_for_recursion: Vec<SimplexIndex> = component_storage
+                    .iter()
+                    .cloned()
                     .filter(|&idx| all_simplex_dims[idx] >= next_q_to_explore_isize)
                     .collect();
                 if !next_scope_for_recursion.is_empty() {
@@ -178,106 +187,220 @@ fn find_components_and_queue_further_work(
             }
         }
     }
-    // visited_in_scope, component_storage, stack_storage are dropped here automatically.
-    // The user's manual drop calls would be here.
-    // drop(visited_in_scope);
-    // drop(component_storage);
-    // drop(stack_storage);
 }
 
-/// Finds hierarchical q-connected components in a list of simplices.
-///
-/// # Arguments
-/// * `simplices`: A vector of simplices, where each simplex is a HashSet of vertex IDs.
-/// * `max_threads_opt`: An optional maximum number of threads for parallel processing. Defaults to 8.
-///
-/// # Returns
-/// A vector of vectors of HashSets of simplex indices.
-/// The outer vector is indexed by q-level.
-/// Each inner vector contains all q-connected components found at that q-level.
-/// Each component is a HashSet of indices referring to the original `simplices` vector.
 pub fn find_hierarchical_q_components(
     simplices: Vec<Simplex>,
-    // max_threads_opt: Option<usize>, // Removed
 ) -> Vec<Vec<HashSet<SimplexIndex>>> {
     if simplices.is_empty() {
         return Vec::new();
     }
 
-    let simplex_dims: Vec<SimplexDimension> = simplices
-        .iter()
-        .map(calculate_simplex_dimension)
-        .collect();
+    let simplex_dims: Vec<SimplexDimension> =
+        simplices.iter().map(calculate_simplex_dimension).collect();
 
     let max_overall_dim = simplex_dims.iter().max().cloned().unwrap_or(-1);
-    if max_overall_dim < 0 { // All simplices are empty or invalid
+    if max_overall_dim < 0 {
         let mut results = Vec::new();
-        if !simplices.is_empty() { 
-             results.resize_with(1, Vec::new); // For q=0, if needed.
+        if !simplices.is_empty() {
+            results.resize_with(1, Vec::new);
         }
-        return results; 
+        return results;
     }
-    
+
     let results_vec_size = (max_overall_dim + 1) as usize;
     let mut results: Vec<Vec<HashSet<SimplexIndex>>> = vec![Vec::new(); results_vec_size];
-    
+
     let initial_scope_indices: Vec<SimplexIndex> = (0..simplices.len()).collect();
 
     let mut work_queue: VecDeque<(Vec<SimplexIndex>, usize)> = VecDeque::new();
-    if !initial_scope_indices.is_empty() { // Only queue if there are simplices
-         work_queue.push_back((initial_scope_indices, 0)); // Start with q=0 and all simplices
+    if !initial_scope_indices.is_empty() {
+        work_queue.push_back((initial_scope_indices, 0));
     }
 
     while let Some((current_processing_scope, q)) = work_queue.pop_front() {
         find_components_and_queue_further_work(
-            current_processing_scope, // Moves ownership
+            current_processing_scope,
             q,
-            &simplices,         // Pass as reference
-            &simplex_dims,      // Pass as reference
-            &mut results,       // Mutable reference to results
+            &simplices,
+            &simplex_dims,
+            &mut results,
             max_overall_dim,
-            &mut work_queue,    // Mutable reference to work_queue
+            &mut work_queue,
         );
     }
 
     results
 }
 
-/// Python wrapper for `find_hierarchical_q_components`.
 #[pyfunction]
-fn py_find_hierarchical_q_components(py: Python, py_simplices: PyObject /*, max_threads_opt: Option<usize> Removed */) -> PyResult<PyObject> {
-    let rust_simplices: Vec<Simplex> = py_simplices.extract::<Vec<Vec<VertexId>>>(py)?
+fn py_find_hierarchical_q_components(
+    py: Python,
+    py_simplices: PyObject,
+) -> PyResult<PyObject> {
+    let rust_simplices: Vec<Simplex> = py_simplices
+        .extract::<Vec<Vec<VertexId>>>(py)?
         .into_iter()
         .map(|vertex_list| vertex_list.into_iter().collect::<HashSet<VertexId>>())
         .collect();
 
-    // Call the core Rust function (now without max_threads_opt)
-    let rust_result: Vec<Vec<HashSet<SimplexIndex>>> = find_hierarchical_q_components(rust_simplices);
+    let rust_result: Vec<Vec<HashSet<SimplexIndex>>> =
+        find_hierarchical_q_components(rust_simplices);
 
     let py_outer_list = PyList::empty_bound(py);
     for q_level_components_rust in rust_result {
         let py_inner_list_for_q_level = PyList::empty_bound(py);
         for component_rust in q_level_components_rust {
-            let py_set_for_component = PySet::new_bound(py, &component_rust.into_iter().collect::<Vec<_>>())?;
+            let py_set_for_component =
+                PySet::new_bound(py, &component_rust.into_iter().collect::<Vec<_>>())?;
             py_inner_list_for_q_level.append(py_set_for_component)?;
         }
         py_outer_list.append(py_inner_list_for_q_level)?;
     }
-    
+
     Ok(py_outer_list.into_py(py))
 }
 
-/// This defines the Python module and its functions.
+/// Calculates persistent q-connected components from a distance matrix and thresholds.
+pub fn calculate_persistent_q_components(
+    edges: Vec<(VertexId, VertexId, f64)>,
+) -> Vec<PersistenceEntry> {
+    if edges.is_empty() {
+        return Vec::new();
+    }
+
+    let mut thresholds = edges
+        .iter()
+        .filter_map(|(_, _, weight)| weight.is_finite().then_some(*weight))
+        .collect::<Vec<_>>();
+
+    thresholds.sort_by(utils::compare_f64_nan_first);
+
+    let mut persistence_results: Vec<PersistenceEntry> = Vec::new();
+    let mut active_components: HashMap<CanonicalComponentId, f64> = HashMap::new();
+
+    for current_threshold in &thresholds {
+        let present_nodes: HashSet<_> = edges
+            .iter()
+            .filter(|(_, _, weight)| weight.is_finite())
+            .filter(|(_, _, weight)| current_threshold.partial_cmp(weight) == Some(std::cmp::Ordering::Greater))
+            .cloned()
+            .map(|(node_a, node_b, _)| NodeIndex::new(node_a.max(node_b) as usize))
+            .collect();
+
+        let graph = UnGraph::<VertexId, ()>::from_edges(edges.iter().filter_map(
+            |(node_a, node_b, weight)| {
+                (weight.is_finite()
+                    && current_threshold.partial_cmp(weight) == Some(std::cmp::Ordering::Greater))
+                .then(|| (NodeIndex::new(*node_a), NodeIndex::new(*node_b)))
+            },
+        ));
+
+        let start_time = Instant::now();
+        let cliques = algo::maximal_cliques(&graph)
+            .into_iter()
+            .filter_map(|clique| {
+                present_nodes.intersection(&clique).any(|_| true).then(|| {
+                    clique
+                        .into_iter()
+                        .map(|node_idx| node_idx.index())
+                        .collect::<HashSet<_>>()
+                })
+            })
+            .collect::<Vec<_>>();
+        let duration = start_time.elapsed();
+        
+        let start_time = Instant::now();
+        let hierarchical_q_components_indices = find_hierarchical_q_components(cliques.clone())
+            .into_iter()
+            .enumerate()
+            .map(|(q, components_list)| {
+                components_list
+                    .into_iter()
+                    .map(|list_of_cliques_indecies| {
+                        (
+                            q,
+                            list_of_cliques_indecies
+                                .into_iter()
+                                .filter_map(|clique_index| cliques.get(clique_index).cloned())
+                                .flatten()
+                                .collect::<BTreeSet<_>>(),
+                        )
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .flatten()
+            .collect::<HashSet<_>>();
+        let duration_components = start_time.elapsed();
+        println!("current_threshold: {}, num_cliques: {}, bron-kerbosh took {:?}, components took {:?}", current_threshold, cliques.len(), duration, duration_components);
+
+        let (old_components, new_components): (HashSet<_>, HashSet<_>) =
+            hierarchical_q_components_indices
+                .into_iter()
+                .partition(|key| active_components.contains_key(key));
+
+        let (preserved_active_components, dead_components) = active_components
+            .clone()
+            .into_iter()
+            .partition(|(key, _value)| old_components.contains(key));
+
+        active_components = preserved_active_components;
+        for new_component in new_components.into_iter() {
+            active_components.insert(new_component, *current_threshold);
+        }
+
+        for ((q, component_vertices), dead_component_birth) in dead_components.into_iter() {
+            persistence_results.push((
+                (q, component_vertices.into_iter().collect()),
+                dead_component_birth,
+                *current_threshold,
+            ));
+        }
+    }
+
+    // Handle components that survive all thresholds
+    for ((q, component_vertices), dead_component_birth) in active_components.into_iter() {
+        persistence_results.push((
+            (q, component_vertices.into_iter().collect()),
+            dead_component_birth,
+            *(thresholds.last().unwrap()),
+        ));
+    }
+
+    persistence_results
+}
+
+#[pyfunction]
+fn py_calculate_persistent_q_components(
+    py: Python,
+    py_edges: PyObject,
+) -> PyResult<PyObject> {
+    let rust_edges: Vec<(VertexId, VertexId, f64)> = py_edges.extract(py)?;
+
+    let rust_result: Vec<PersistenceEntry> =
+        calculate_persistent_q_components(rust_edges);
+
+    let py_results_list = PyList::empty_bound(py);
+    for ((q_level, vertices), birth, death) in rust_result {
+        let py_vertices = PyList::new_bound(py, &vertices); // vertices is already Vec<VertexId>
+        let py_component_id = (q_level.to_object(py), py_vertices.to_object(py)).to_object(py);
+        let py_entry = (py_component_id, birth.to_object(py), death.to_object(py)).to_object(py);
+        py_results_list.append(py_entry)?;
+    }
+    Ok(py_results_list.into_py(py))
+}
+
 #[pymodule]
 fn q_analysis(_py: Python, m: &Bound<PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(py_find_hierarchical_q_components, m)?)?;
+    m.add_function(wrap_pyfunction!(py_calculate_persistent_q_components, m)?)?;
     Ok(())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::collections::HashSet;
+    use hashbrown::hash_set::HashSet;
 
     fn set(vertices: &[VertexId]) -> Simplex {
         vertices.iter().cloned().collect()
@@ -296,7 +419,7 @@ mod tests {
         let result = find_hierarchical_q_components(simplices);
         // Expected: q=0: [[{0}]]
         assert_eq!(result.len(), 1); // Only for q=0
-        assert_eq!(result[0].len(), 1); 
+        assert_eq!(result[0].len(), 1);
         assert_eq!(result[0][0], vec![0 as SimplexIndex].into_iter().collect());
     }
 
@@ -305,22 +428,22 @@ mod tests {
         let simplices = vec![set(&[0, 1])]; // dim 1
         let result = find_hierarchical_q_components(simplices);
         // Expected: q=0: [[{0}]], q=1: [[{0}]]
-        assert_eq!(result.len(), 2); 
+        assert_eq!(result.len(), 2);
         assert_eq!(result[0].len(), 1);
         assert_eq!(result[0][0], vec![0 as SimplexIndex].into_iter().collect());
         assert_eq!(result[1].len(), 1);
         assert_eq!(result[1][0], vec![0 as SimplexIndex].into_iter().collect());
     }
-    
+
     #[test]
     fn two_disjoint_vertices() {
         let simplices = vec![set(&[0]), set(&[1])]; // both dim 0
         let result = find_hierarchical_q_components(simplices);
         // Expected: q=0: [[{0}], [{1}]] (or vice versa)
         assert_eq!(result.len(), 1);
-        assert_eq!(result[0].len(), 2); 
+        assert_eq!(result[0].len(), 2);
         let mut comp0_sorted: Vec<HashSet<SimplexIndex>> = result[0].clone();
-        comp0_sorted.sort_by_key(|s| *(s.iter().next().unwrap_or(&0))); 
+        comp0_sorted.sort_by_key(|s| *(s.iter().next().unwrap_or(&0)));
 
         let expected_q0_comp0: HashSet<SimplexIndex> = vec![0].into_iter().collect();
         let expected_q0_comp1: HashSet<SimplexIndex> = vec![1].into_iter().collect();
@@ -334,23 +457,23 @@ mod tests {
         let result = find_hierarchical_q_components(simplices);
         // q=0: [[{0, 1}]] (s0 and s1 are 0-near via {1})
         // q=1: [[{0}], [{1}]] (s0 not 1-near s1 as shared face {1} is dim 0)
-        
+
         assert_eq!(result.len(), 2);
 
-        assert_eq!(result[0].len(), 1); 
+        assert_eq!(result[0].len(), 1);
         let expected_q0: HashSet<SimplexIndex> = vec![0, 1].into_iter().collect();
         assert_eq!(result[0][0], expected_q0);
 
-        assert_eq!(result[1].len(), 2); 
+        assert_eq!(result[1].len(), 2);
         let mut comp1_sorted: Vec<HashSet<SimplexIndex>> = result[1].clone();
-        comp1_sorted.sort_by_key(|s| *(s.iter().next().unwrap_or(&0))); 
+        comp1_sorted.sort_by_key(|s| *(s.iter().next().unwrap_or(&0)));
 
         let expected_q1_comp0: HashSet<SimplexIndex> = vec![0].into_iter().collect();
         let expected_q1_comp1: HashSet<SimplexIndex> = vec![1].into_iter().collect();
         assert_eq!(comp1_sorted[0], expected_q1_comp0);
         assert_eq!(comp1_sorted[1], expected_q1_comp1);
     }
-    
+
     #[test]
     fn complex_case_q0_q1_q2() {
         // s0: {0,1,2} (2-simplex)
@@ -371,14 +494,14 @@ mod tests {
         assert_eq!(result[0].len(), 2);
         let mut q0_comps: Vec<HashSet<SimplexIndex>> = result[0].clone();
         q0_comps.sort_by_key(|c| c.iter().cloned().min().unwrap_or(SimplexIndex::MAX));
-        assert_eq!(q0_comps[0], vec![0,1,2].into_iter().collect());
+        assert_eq!(q0_comps[0], vec![0, 1, 2].into_iter().collect());
         assert_eq!(q0_comps[1], vec![3].into_iter().collect());
-        
+
         // Q=1: [[{0,1}], [{2}], [{3}]]
         assert_eq!(result[1].len(), 3);
         let mut q1_comps: Vec<HashSet<SimplexIndex>> = result[1].clone();
         q1_comps.sort_by_key(|c| c.iter().cloned().min().unwrap_or(SimplexIndex::MAX));
-        assert_eq!(q1_comps[0], vec![0,1].into_iter().collect());
+        assert_eq!(q1_comps[0], vec![0, 1].into_iter().collect());
         assert_eq!(q1_comps[1], vec![2].into_iter().collect());
         assert_eq!(q1_comps[2], vec![3].into_iter().collect());
 
@@ -418,12 +541,17 @@ mod tests {
 
         // Expected FSV: Q_0=1, Q_1=1, Q_2=7, Q_3=6, Q_4=1
         // Corresponding to result[0].len(), result[1].len(), ... result[4].len()
-        let expected_fsv = vec![1, 1, 7, 6, 1]; 
+        let expected_fsv = vec![1, 1, 7, 6, 1];
         let result = find_hierarchical_q_components(simplices);
 
         assert_eq!(result.len(), expected_fsv.len(), "Number of q-levels");
         for q in 0..expected_fsv.len() {
-            assert_eq!(result[q].len(), expected_fsv[q], "Number of components for q={}", q);
+            assert_eq!(
+                result[q].len(),
+                expected_fsv[q],
+                "Number of components for q={}",
+                q
+            );
         }
     }
 }
