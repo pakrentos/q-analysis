@@ -88,6 +88,15 @@ class IncidenceSimplicialComplexDev:
                             max_vertex = current_max
                 self._num_vertices = max_vertex + 1
         return self._num_vertices
+    
+    @property
+    def vertices(self):
+        """Returns the list of vertices in the complex."""
+        return sorted(
+            list(
+                set().union(*[set(s) for s in self.simplices])
+            )
+        )
 
 
     def simplex_orders(self):
@@ -258,35 +267,19 @@ class IncidenceSimplicialComplexDev:
             If `as_dataframe` is True, returns a DataFrame with 'Node' and
             'Topological Dimensionality' columns.
         """
-        n_verts = self.num_vertices
-        if n_verts == 0:
-             top_dim = np.array([], dtype=int)
-        else:
-            # Initialize max order for each vertex to -1 (or lowest possible order)
-            vertex_max_order = defaultdict(lambda: -1)
-            simplex_orders_list = self.simplex_orders()
-
-            for i, simplex in enumerate(self.simplices):
-                order = simplex_orders_list[i]
-                for vertex in simplex:
-                    vertex_max_order[vertex] = max(vertex_max_order[vertex], order)
-
-            # Convert defaultdict to a dense numpy array, ensuring size matches num_vertices
-            top_dim = np.full(n_verts, -1, dtype=int) # Default for vertices not in any simplex
-            for vertex, max_order in vertex_max_order.items():
-                 if 0 <= vertex < n_verts: 
-                     top_dim[vertex] = max_order
+        vertices = self.vertices
+        vertices_topological_dimensionality = {k: 0 for k in vertices}
+        for simplex in self.simplices:
+            for vertex in simplex:
+                vertices_topological_dimensionality[vertex] += 1
 
         if as_dataframe:
             if node_names is None:
-                node_names = np.arange(n_verts)
-            elif len(node_names) != n_verts:
-                 # Handle mismatch in provided node names length
-                 print(f"Warning: node_names length ({len(node_names)}) doesn't match number of vertices ({n_verts}). Using default indices.")
-                 node_names = np.arange(n_verts)
-            return pd.DataFrame({'Node': node_names, 'Topological Dimensionality': top_dim})
+                node_names = vertices
+            
+            return pd.DataFrame({'Node': node_names, 'Topological Dimensionality': [vertices_topological_dimensionality[v] for v in vertices]})
         else:
-            return top_dim
+            return np.array([vertices_topological_dimensionality[v] for v in vertices])
 
 
     def first_structure_vector(self):
