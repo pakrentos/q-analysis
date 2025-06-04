@@ -190,8 +190,8 @@ fn get_subcliques(clique_obj: &Clique, target_size: usize) -> Vec<Clique> {
 fn enumerate_k_cliques_from_graph(
     adj_map: &HashMap<VertexId, BTreeSet<VertexId>>,
     nodes_list_orig: &[VertexId],
-    max_k_to_find: usize, // Max clique size to find
-) -> (CliqueManager, usize) { // Returns (clique_manager, max_clique_size_found)
+    max_k_to_find: usize,
+) -> (CliqueManager, usize) {
     let mut clique_manager = CliqueManager::new();
 
     if max_k_to_find == 0 || nodes_list_orig.is_empty() {
@@ -212,7 +212,7 @@ fn enumerate_k_cliques_from_graph(
         return (clique_manager, k_max_found);
     }
 
-    for k_current in 1..max_k_to_find { // k_current is current clique size
+    for k_current in 1..max_k_to_find {
         let cliques_k_ids = match clique_manager.get_cliques_of_size(k_current) {
             Some(ids) => ids.clone(), 
             None => break, 
@@ -275,17 +275,17 @@ fn enumerate_k_cliques_from_graph(
 }
 
 #[allow(clippy::too_many_lines)]
-pub fn find_all_q_connected_components_rust(
-    graph_nodes: &[VertexId],
+pub fn find_all_q_connected_components(
     graph_adj_map: &HashMap<VertexId, BTreeSet<VertexId>>,
     k_max_hint_param: Option<usize>,
 ) -> HashMap<isize, Vec<BTreeSet<VertexId>>> {
+    let graph_nodes = graph_adj_map.keys().cloned().collect::<Vec<VertexId>>();
     let k_max_hint = k_max_hint_param.unwrap_or_else(|| graph_nodes.len());
     
     let effective_k_max_hint = if k_max_hint == 0 && !graph_nodes.is_empty() { 1 } else { k_max_hint };
     
     let (clique_manager, k_max_actual) =
-        enumerate_k_cliques_from_graph(graph_adj_map, graph_nodes, effective_k_max_hint);
+        enumerate_k_cliques_from_graph(graph_adj_map, &graph_nodes, effective_k_max_hint);
 
     let mut results_by_q: HashMap<isize, Vec<BTreeSet<VertexId>>> = HashMap::new();
     

@@ -1,20 +1,17 @@
 use hashbrown::hash_set::HashSet;
-use std::collections::VecDeque;
+use graph_q_components::find_all_q_connected_components;
 use std::cmp::Ordering;
+use std::collections::VecDeque;
 
-use petgraph::algo;
-use petgraph::graph::{NodeIndex, UnGraph};
 use std::collections::{BTreeSet, HashMap};
-use std::time::Instant;
 
 use crate::types::*;
 
-
-mod types;
-mod persistent_q_components;
+mod graph_q_components;
+mod pybindings;
 #[cfg(test)]
 mod tests;
-mod pybindings;
+mod types;
 
 
 fn calculate_simplex_dimension(simplex: &Simplex) -> SimplexDimension {
@@ -187,9 +184,7 @@ fn find_components_and_queue_further_work(
     }
 }
 
-pub fn find_hierarchical_q_components(
-    simplices: Vec<Simplex>,
-) -> Vec<Vec<HashSet<SimplexIndex>>> {
+pub fn find_hierarchical_q_components(simplices: Vec<Simplex>) -> Vec<Vec<HashSet<SimplexIndex>>> {
     if simplices.is_empty() {
         return Vec::new();
     }
@@ -231,78 +226,53 @@ pub fn find_hierarchical_q_components(
     results
 }
 
-
 /// Calculates persistent q-connected components from a distance matrix and thresholds.
 pub fn calculate_persistent_q_components(
     edges: Vec<(VertexId, VertexId, f64)>,
+    max_q: Option<usize>,
 ) -> Vec<PersistenceEntry> {
     if edges.is_empty() {
         return Vec::new();
     }
 
-    let mut thresholds = edges
-        .iter()
-        .filter_map(|(_, _, weight)| weight.is_finite().then_some(*weight))
+    let mut sorted_edges = edges
+        .into_iter()
+        .filter(|(_, _, weight)| weight.is_finite())
         .collect::<Vec<_>>();
 
-    thresholds.sort_by(compare_f64_nan_first);
+    sorted_edges
+        .sort_by(|(_, _, weight_a), (_, _, weight_b)| compare_f64_nan_first(weight_a, weight_b));
 
     let mut persistence_results: Vec<PersistenceEntry> = Vec::new();
     let mut active_components: HashMap<CanonicalComponentId, f64> = HashMap::new();
+    let mut adjacency_map: HashMap<VertexId, BTreeSet<VertexId>> = HashMap::new();
 
-    for current_threshold in &thresholds {
-        let present_nodes: HashSet<_> = edges
-            .iter()
-            .filter(|(_, _, weight)| weight.is_finite())
-            .filter(|(_, _, weight)| current_threshold.partial_cmp(weight) == Some(std::cmp::Ordering::Greater))
-            .cloned()
-            .map(|(node_a, node_b, _)| NodeIndex::new(node_a.max(node_b) as usize))
-            .collect();
+    for current_edge in &sorted_edges {
+        adjacency_map
+            .entry(current_edge.0)
+            .and_modify(|set| {
+                set.insert(current_edge.1);
+            })
+            .or_insert(BTreeSet::from([current_edge.1]));
 
-        let graph = UnGraph::<VertexId, ()>::from_edges(edges.iter().filter_map(
-            |(node_a, node_b, weight)| {
-                (weight.is_finite()
-                    && current_threshold.partial_cmp(weight) == Some(std::cmp::Ordering::Greater))
-                .then(|| (NodeIndex::new(*node_a), NodeIndex::new(*node_b)))
-            },
-        ));
+        adjacency_map
+            .entry(current_edge.1)
+            .and_modify(|set| {
+                set.insert(current_edge.0);
+            })
+            .or_insert(BTreeSet::from([current_edge.0]));
 
-        let start_time = Instant::now();
-        let cliques = algo::maximal_cliques(&graph)
-            .into_iter()
-            .filter_map(|clique| {
-                present_nodes.intersection(&clique).any(|_| true).then(|| {
-                    clique
+        let hierarchical_q_components_indices: HashSet<(isize, BTreeSet<VertexId>)> =
+            find_all_q_connected_components(&adjacency_map, max_q)
+                .into_iter()
+                .flat_map(|(key, vec_of_components)| {
+                    vec_of_components
                         .into_iter()
-                        .map(|node_idx| node_idx.index())
-                        .collect::<HashSet<_>>()
+                        .map(move |btreeset| {
+                            (key, btreeset)
+                        })
                 })
-            })
-            .collect::<Vec<_>>();
-        let duration = start_time.elapsed();
-        
-        let start_time = Instant::now();
-        let hierarchical_q_components_indices = find_hierarchical_q_components(cliques.clone())
-            .into_iter()
-            .enumerate()
-            .map(|(q, components_list)| {
-                components_list
-                    .into_iter()
-                    .map(|list_of_cliques_indecies| {
-                        (
-                            q,
-                            list_of_cliques_indecies
-                                .into_iter()
-                                .filter_map(|clique_index| cliques.get(clique_index).cloned())
-                                .flatten()
-                                .collect::<BTreeSet<_>>(),
-                        )
-                    })
-                    .collect::<Vec<_>>()
-            })
-            .flatten()
-            .collect::<HashSet<_>>();
-        let duration_components = start_time.elapsed();
+                .collect();
 
         let (old_components, new_components): (HashSet<_>, HashSet<_>) =
             hierarchical_q_components_indices
@@ -316,14 +286,14 @@ pub fn calculate_persistent_q_components(
 
         active_components = preserved_active_components;
         for new_component in new_components.into_iter() {
-            active_components.insert(new_component, *current_threshold);
+            active_components.insert(new_component, current_edge.2);
         }
 
         for ((q, component_vertices), dead_component_birth) in dead_components.into_iter() {
             persistence_results.push((
                 (q, component_vertices.into_iter().collect()),
                 dead_component_birth,
-                *current_threshold,
+                current_edge.2,
             ));
         }
     }
@@ -333,11 +303,9 @@ pub fn calculate_persistent_q_components(
         persistence_results.push((
             (q, component_vertices.into_iter().collect()),
             dead_component_birth,
-            *(thresholds.last().unwrap()),
+            sorted_edges.last().unwrap().2,
         ));
     }
 
     persistence_results
 }
-
-
