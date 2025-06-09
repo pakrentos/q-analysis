@@ -18,113 +18,60 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 import numpy as np
 from sklearn.base import BaseEstimator, TransformerMixin, ClusterMixin
-from .utils import get_incidence, construct_structure_vectors_datasets
+from itertools import combinations
 from .simplicial_complex import IncidenceSimplicialComplex
+from scipy import sparse
+from typing import Iterable
 
-class SimplicialFilter(BaseEstimator, TransformerMixin):
-    """
-    Transformer that filters a graph based on the dimension of simplices in its simplicial complex.
-    
-    This transformer takes an adjacency matrix representing a graph, finds all maximal cliques
-    (which are interpreted as simplices), builds a simplicial complex, and then filters out
-    all simplices with dimension less than q. Finally, it reconstructs a filtered adjacency matrix
-    that preserves only the edges that are part of the remaining higher-dimensional simplices.
-    
-    Parameters
-    ----------
-    q : int, default=0
-        Minimum dimension of simplices to keep. Simplices with dimension < q will be filtered out.
-        
-    threshold : callable or None, default=None
-        Function to convert weighted adjacency matrices to binary adjacency matrices.
-        If None and the input is not binary, a ValueError will be raised.
-    
-    Attributes
-    ----------
-    q : int
-        The minimum dimension of simplices to keep.
-        
-    threshold : callable or None
-        The function used to threshold weighted adjacency matrices.
-    """
+class GraphCliqueFilter(BaseEstimator, TransformerMixin):
     def __init__(self, *, q=0, threshold=None):
         self.q = q
         self.threshold = threshold
 
     def fit(self, X, y=None):
-        """
-        Fit the transformer (no-op).
-        
-        Parameters
-        ----------
-        X : array-like of shape (n_samples, n_nodes, n_nodes)
-            Input adjacency matrices.
-            
-        y : Ignored
-            Not used, present for API consistency.
-            
-        Returns
-        -------
-        self : object
-            Returns self.
-        """
         return self
 
     def transform(self, X, y=None):
-        """
-        Transform adjacency matrices by filtering based on simplex dimension.
-        
-        Parameters
-        ----------
-        X : array-like of shape (n_samples, n_nodes, n_nodes)
-            Input adjacency matrices.
-            
-        y : Ignored
-            Not used, present for API consistency.
-            
-        Returns
-        -------
-        X_filtered : ndarray of shape (n_samples, n_nodes, n_nodes)
-            Filtered adjacency matrices where only edges that are part of
-            simplices with dimension >= q are preserved.
-            
-        Raises
-        ------
-        ValueError
-            If input is not binary and no threshold function is provided.
-        """
-        int_flag = (X.dtype == int) and (np.unique(X) == [0, 1]).all()
-        bool_flag = X.dtype == bool
-        process_fn = lambda x: x
-        if not bool_flag and not int_flag:
-            if self.threshold is None:
-                raise ValueError("Threshold for edges is not specified")
-            else:
-                process_fn = self.threshold
-
-        result = []
+        simps = []
         for x in X:
-            inc = IncidenceSimplicialComplex.from_adjacency_matrix(process_fn(x)).incidence_matrix
-            simp = IncidenceSimplicialComplex(inc)
-            filtered_inc = simp.q_upper_incidence(self.q)
-            adj_restored = self.get_adj_mask(filtered_inc)
-            temp = x.copy()
-            temp[~adj_restored] = 0
-            result.append(temp)
-        return np.array(result)
+            adj = x
+            if self.threshold:
+                adj = self.threshold(x)
+            simps.append(IncidenceSimplicialComplex.from_adjacency_matrix(adj))
+        
+        projector = SimplexProjection(q=self.q)
+        adj_masks = projector.transform(simps)
+        
+        result = X.copy()
+        result[~adj_masks.astype(bool)] = 0
+        
+        return result
 
-    @classmethod
-    def get_adj_mask(cls, inc):
+class SimplexProjection(BaseEstimator, TransformerMixin):
+    def __init__(self, q=0, weighted=False):
+        self.q = q
+        self.weighted = weighted
+
+    def fit(self, X, y=None):
+        return self
+
+    def transform(self, X, y=None):
         result = []
-        for column in inc.T:
-            temp = inc[column > 0]
-            if temp.shape[0] == 0:
-                result.append(np.zeros(temp.shape[-1], dtype=bool))
-            else:
-                result.append(temp.any(0))
+        num_nodes = max(max(i) for simp in X for i in simp.simplices) + 1
+        for simp in X:
+            filtered_simplices = [s for s in simp.simplices if len(s) >= self.q + 1]
+
+            adj = sparse.lil_matrix((num_nodes, num_nodes), dtype=int)
+            for simplex in filtered_simplices:
+                for i, j in combinations(simplex, 2):
+                    if self.weighted:
+                        adj[i, j] = adj[j, i] = 1 + adj[i, j]
+                    else:
+                        adj[i, j] = adj[j, i] = 1
+            result.append(adj.tocsr())
         return np.array(result)
 
-class StructureVectorsTransformer(BaseEstimator, TransformerMixin):
+class GradedParametersTransformer(BaseEstimator, TransformerMixin):
     """
     Transformer that extracts q-analysis structure vectors from graphs represented by adjacency matrices.
     
@@ -167,7 +114,7 @@ class StructureVectorsTransformer(BaseEstimator, TransformerMixin):
         """
         return self
 
-    def transform(self, X):
+    def transform(self, X: Iterable[IncidenceSimplicialComplex]):
         """
         Transform adjacency matrices into q-analysis metrics.
         
@@ -182,7 +129,7 @@ class StructureVectorsTransformer(BaseEstimator, TransformerMixin):
             If flatten=True: Array of shape (n_samples, n_features) containing flattened q-metrics.
             If flatten=False: Array of shape (n_samples, n_orders, n_metrics) containing structured q-metrics.
         """
-        structure_vectors = construct_structure_vectors_datasets(X, self.max_order, self.fill_value)
+        structure_vectors = [IncidenceSimplicialComplex.from_adjacency_matrix(adj).graded_parameters() for adj in X]
         
         if self.flatten:
             # Flatten the array to shape (n_samples, n_features)

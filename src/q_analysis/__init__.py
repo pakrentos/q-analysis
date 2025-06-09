@@ -18,10 +18,12 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 from .simplicial_complex import IncidenceSimplicialComplex
 from .q_analysis import *
+from .datasets import load_dataset
 
 if hasattr(q_analysis, "__all__"):
     __all__ = q_analysis.__all__
 
 __all__ +=[
     'IncidenceSimplicialComplex',
+    'load_dataset',
 ]
