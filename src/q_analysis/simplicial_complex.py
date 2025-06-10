@@ -228,6 +228,17 @@ class IncidenceSimplicialComplex:
                 set().union(*[set(s) for s in self.simplices])
             )
         )
+    
+    def simplicial_connectivty(self):
+        """Returns the simplicial connectivity matrix."""
+        connectivity_matrix = np.zeros((len(self.simplices), len(self.simplices)))
+        for i in range(len(self.simplices)):
+            for j in range(i, len(self.simplices)):
+                connectivity_matrix[i, j] = connectivity_matrix[j, i] = len(
+                    self.simplices[i].intersection(self.simplices[j])
+                )
+        connectivity_matrix -= 1
+        return connectivity_matrix
 
     def simplex_orders(self):
         """
