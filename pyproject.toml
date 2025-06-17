@@ -34,10 +34,7 @@ dependencies = [
 Homepage = "https://github.com/pakrentos/q-analysis" 
 
 [tool.maturin]
-# manifest-path = "rust_extension/Cargo.toml"
 features = ["pyo3/extension-module"]
-# python-source = "src/"
-# module-name = "q_analysis._q_analysis_ext"
 
 [tool.setuptools]
 package-dir = {"" = "src"}
