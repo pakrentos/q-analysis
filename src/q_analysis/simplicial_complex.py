@@ -1,8 +1,9 @@
 import numpy as np
 import networkx as nx
 import pandas as pd
-from collections import defaultdict, Counter
+from collections import Counter
 from q_analysis.q_analysis import py_find_hierarchical_q_components
+from typing import Set, Union
 
 
 VECTORS = ['FSV', 'SSV', 'TSV', 'Topological Entropy', 'Simplex Count', 'Shared Faces Count']
@@ -16,6 +17,7 @@ ABBREVIATIONS_MAP = {
     'faces': 'Shared Faces Count',
 }
 
+SimplexInput = Union[int, Set[int]]
 
 class GradedParameterSet:
     """
@@ -25,7 +27,7 @@ class GradedParameterSet:
     def __init__(self, name: str, values: np.ndarray, q_max: int):
         self.name = name
         self.values = np.asarray(values)
-        self.q_max = q_max # Maximum q for which this parameter is defined
+        self.q_max = q_max
 
     def __repr__(self):
         return f"GradedParameterSet(name='{self.name}', q_max={self.q_max}, values={self.values})"
@@ -42,11 +44,11 @@ class GradedParameterSet:
         """Returns a Pandas DataFrame representation."""
         return pd.DataFrame({'q': np.arange(len(self.values)), self.name: self.values})
     
-    def to_numpy(self, max_order: int | None = None):
+    def to_numpy(self, max_order: int | None = None, fill_value: float = np.nan):
         if max_order is None:
             max_order = self.q_max
-        if max_order < self.q_max:
-            return np.pad(self.values, (0, max_order + 1 - self.q_max), mode='constant', constant_values=np.nan)
+        if max_order > self.q_max:
+            return np.pad(self.values.astype(float), (0, max_order - self.q_max), mode='constant', constant_values=fill_value)
         return self.values[:max_order + 1]
 
 
@@ -56,7 +58,7 @@ class GradedParameters:
     This is typically the result of computing multiple Q-analysis vectors.
     """
     def __init__(self, parameters: dict[str, GradedParameterSet]):
-        self.parameters = parameters # dict mapping parameter name to GradedParameterSet instance
+        self.parameters = parameters
 
     def __repr__(self):
         names = list(self.parameters.keys())
@@ -75,6 +77,14 @@ class GradedParameters:
     def names(self) -> list[str]:
         """Returns the names of the parameters stored."""
         return list(self.parameters.keys())
+    
+    @classmethod
+    def from_numpy(cls, numpy_array: np.ndarray, measure_names: list[str] = VECTORS):
+        """Creates a GradedParameters object from a NumPy array."""
+        return cls(parameters={name: GradedParameterSet(name=name, values=numpy_array[:, i], q_max=numpy_array.shape[1] - 1) for i, name in enumerate(measure_names)})
+    
+    def get_max_order(self):
+        return max(param_set.q_max for param_set in self.parameters.values())
 
     def to_dataframe(self):
         """
@@ -88,13 +98,13 @@ class GradedParameters:
             for name, param_set in self.parameters.items()
         ], ignore_index=True).reset_index(drop=True)
     
-    def to_numpy(self, max_order: int | None = None):
+    def to_numpy(self, max_order: int | None = None, fill_value: float = np.nan):
         """
         Returns a NumPy array representation of all parameters.
         """
         if max_order is None:
             max_order = max(param_set.q_max for param_set in self.parameters.values())
-        return np.array([param_set.to_numpy(max_order) for param_set in self.parameters.values()])
+        return np.array([param_set.to_numpy(max_order, fill_value) for param_set in self.parameters.values()]).T
 
 
 class NodeParameterSet:
@@ -129,10 +139,10 @@ class QAnalysisReport:
     def __init__(self, 
                  q_graded_parameters: GradedParameters | None = None, 
                  node_graded_parameters: dict[str, NodeParameterSet] | None = None,
-                 order: int | None = None): # Max order of the complex
+                 order: int | None = None):
         self.q_graded_parameters = q_graded_parameters if q_graded_parameters is not None else GradedParameters({})
         self.node_graded_parameters = node_graded_parameters if node_graded_parameters is not None else {}
-        self.order = order # Max dimension of the complex
+        self.order = order
 
     def __repr__(self):
         q_param_names = self.q_graded_parameters.names
@@ -148,11 +158,11 @@ class QAnalysisReport:
         return self.node_graded_parameters.get(name)
 
 
-class IncidenceSimplicialComplex:
+class SimplicialComplex:
     """
     Represents a simplicial complex using a list of simplices (sets of vertices).
     """
-    def __init__(self, simplices):
+    def __init__(self, simplices, underlying_graph_edges=None):
         """
         Initialize with a list of simplices.
 
@@ -166,8 +176,8 @@ class IncidenceSimplicialComplex:
         self._simplex_orders = None 
         self._connected_components_cache = None 
         self._num_vertices = None
+        self._underlying_graph_edges = underlying_graph_edges
 
-        # Map vector names to their corresponding methods
         self._vector_method_map = {
             'FSV': self.first_structure_vector,
             'SSV': self.second_structure_vector,
@@ -189,13 +199,12 @@ class IncidenceSimplicialComplex:
 
         Returns:
         --------
-        IncidenceSimplicialComplex
+        SimplicialComplex
             A new complex instance built from the cliques of the graph.
         """
         graph = nx.Graph(adj_matrix)
-        # find_cliques returns iterators of nodes, convert to sets
         cliques = [set(clique) for clique in nx.clique.find_cliques(graph)]
-        return cls(cliques)
+        return cls(cliques, underlying_graph_edges=list(graph.edges))
 
     @property
     def num_simplices(self):
@@ -213,7 +222,7 @@ class IncidenceSimplicialComplex:
             else:
                 max_vertex = -1
                 for s in self.simplices:
-                    if s: # Check if simplex is not empty
+                    if s:
                         current_max = max(s)
                         if current_max > max_vertex:
                             max_vertex = current_max
@@ -239,6 +248,13 @@ class IncidenceSimplicialComplex:
                 )
         connectivity_matrix -= 1
         return connectivity_matrix
+    
+    def upper_q_skeleton(self, q) -> 'SimplicialComplex':
+        """
+        Returns the upper q-skeleton of the complex. 
+        Resulting complex is composed of maximal simplices of order >= q.
+        """
+        return SimplicialComplex([s for s in self.simplices if len(s) >= q + 1])
 
     def simplex_orders(self):
         """
@@ -270,7 +286,6 @@ class IncidenceSimplicialComplex:
         representing the q-connected components.
         """
         if self._connected_components_cache is None:
-            # Pass list of sets directly if supported by the binding
             simplices_as_lists = [list(s) for s in self.simplices]
             self._connected_components_cache = py_find_hierarchical_q_components(simplices_as_lists)
         return self._connected_components_cache
@@ -399,21 +414,19 @@ class IncidenceSimplicialComplex:
         NodeParameterSet 
             A NodeParameterSet object.
         """
-        unique_vertices = self.vertices # Sorted list of unique vertex IDs
-        if not unique_vertices: # Handle empty complex or complex with no vertices
+        unique_vertices = self.vertices
+        if not unique_vertices:
             node_param_set = NodeParameterSet(name='Topological Dimensionality', values=np.array([]), node_ids=np.array([]))
             return node_param_set
 
         vertices_topological_dimensionality_map = {vertex: 0 for vertex in unique_vertices}
         for simplex in self.simplices:
             for vertex in simplex:
-                if vertex in vertices_topological_dimensionality_map: # Ensure vertex is in our list
+                if vertex in vertices_topological_dimensionality_map:
                     vertices_topological_dimensionality_map[vertex] += 1
         
-        # Extract values in the order of unique_vertices to ensure consistency
         dim_values = np.array([vertices_topological_dimensionality_map[v] for v in unique_vertices])
 
-        # Determine node identifiers for NodeParameterSet
         current_node_ids = node_names if node_names is not None else unique_vertices
         if node_names is not None and len(node_names) != len(unique_vertices):
             raise ValueError("Length of node_names must match the number of unique vertices in the complex.")
@@ -426,6 +439,80 @@ class IncidenceSimplicialComplex:
 
         return node_param_set
 
+    def _get_simplex(self, simplex_input: SimplexInput) -> set[int]:
+        """Helper to resolve a simplex from an index or a set."""
+        if isinstance(simplex_input, int):
+            if not (0 <= simplex_input < self.num_simplices):
+                raise IndexError(f"Simplex index {simplex_input} out of bounds. Valid range: 0 to {self.num_simplices - 1}")
+            return self.simplices[simplex_input]
+        elif isinstance(simplex_input, set):
+            return simplex_input
+        else:
+            raise TypeError("Simplex input must be an integer index or a set of vertices.")
+
+    def eccentricity(self, simplex_a: SimplexInput, simplex_b: SimplexInput) -> float:
+        """
+        Calculates the eccentricity of a simplex with respect to another simplex.
+        ecc(sigma | sigma') = |sigma \ sigma'| / |sigma|
+
+        Parameters:
+        -----------
+        simplex_a : int or set
+            The simplex sigma, as an index in self.simplices or as a set of vertices.
+        simplex_b : int or set
+            The simplex sigma', as an index in self.simplices or as a set of vertices.
+
+        Returns:
+        --------
+        float
+            The eccentricity value. Returns NaN if the first simplex is empty.
+        """
+        sigma1 = self._get_simplex(simplex_a)
+        sigma2 = self._get_simplex(simplex_b)
+
+        if not sigma1:
+            return np.nan
+
+        return len(sigma1.difference(sigma2)) / len(sigma1)
+
+    def family_eccentricity(self, simplex: SimplexInput, family_indices: list[int] | None = None) -> float:
+        """
+        Calculates the family eccentricity of a simplex with respect to a family of simplices.
+        ecc(sigma | F) = min{ecc(sigma | sigma') for sigma' in F}
+
+        Parameters:
+        -----------
+        simplex : int or set
+            The simplex (sigma), as an index in self.simplices or as a set of vertices.
+        family_indices : list[int] or None, optional
+            A list of indices for the family of simplices (F).
+            If None, the family is considered to be all simplices in the complex
+            (excluding `simplex` itself if it was provided as an index). Defaults to None.
+
+        Returns:
+        --------
+        float
+            The family eccentricity value. Returns NaN if the family is empty.
+        """
+        sigma = self._get_simplex(simplex)
+
+        if family_indices is None:
+            if isinstance(simplex, int):
+                family_indices = [i for i in range(self.num_simplices) if i != simplex]
+            else:
+                family_indices = list(range(self.num_simplices))
+
+        if not family_indices:
+            return np.nan
+
+        eccentricities = [self.eccentricity(sigma, i) for i in family_indices]
+        
+        valid_eccentricities = [ecc for ecc in eccentricities if not np.isnan(ecc)]
+        
+        if not valid_eccentricities:
+            return np.nan
+            
+        return min(valid_eccentricities)
 
     def first_structure_vector(self) -> GradedParameterSet:
         """
@@ -441,7 +528,6 @@ class IncidenceSimplicialComplex:
         if max_q == -1:
              return GradedParameterSet(name='FSV', values=np.array([], dtype=int), q_max=max_q)
 
-        # Ensure connected components are computed and cached
         self._get_all_q_connected_components()
 
         fsv_values = [self.q_connected_components(q) for q in range(max_q + 1)]
@@ -461,8 +547,6 @@ class IncidenceSimplicialComplex:
             return GradedParameterSet(name='Simplex Count', values=np.array([], dtype=int), q_max=max_q)
 
         orders = self.simplex_orders()
-        # bincount counts occurrences of each non-negative integer value in 'orders'
-        # minlength ensures the output array has size at least max_q + 1
         simps_per_q_count_values = np.bincount(orders[orders >= 0], minlength=max_q + 1) if orders.size > 0 else np.zeros(max_q + 1, dtype=int)
         return GradedParameterSet(name='Simplex Count', values=simps_per_q_count_values, q_max=max_q)
 
@@ -480,8 +564,6 @@ class IncidenceSimplicialComplex:
         if not simp_count_param.values.size:
             return GradedParameterSet(name='SSV', values=np.array([], dtype=int), q_max=simp_count_param.q_max)
 
-        # N_k is the sum of counts for dimensions k, k+1, ... max_q
-        # This is achieved by taking the cumulative sum from right-to-left (reverse, cumsum, reverse)
         ssv_values = np.cumsum(simp_count_param.values[::-1])[::-1]
         return GradedParameterSet(name='SSV', values=ssv_values, q_max=simp_count_param.q_max)
 
@@ -503,7 +585,7 @@ class IncidenceSimplicialComplex:
         GradedParameterSet
             The Third Structure Vector (pi).
         """
-        max_q = fsv.q_max # Assuming fsv and ssv will have same q_max
+        max_q = fsv.q_max
 
         if fsv.values.size == 0 or ssv.values.size == 0:
              return GradedParameterSet(name='TSV', values=np.array([], dtype=float), q_max=max_q)
@@ -535,10 +617,8 @@ class IncidenceSimplicialComplex:
         ssv_param = self.second_structure_vector()
 
         if len(fsv_param.values) != len(ssv_param.values):
-             # This case indicates an internal inconsistency
              raise ValueError("FSV and SSV lengths do not match.")
         
-        # q_max should be consistent from fsv_param and ssv_param
         return self._third_structure_vector(fsv_param, ssv_param)
 
     def shared_faces_count(self) -> GradedParameterSet:
@@ -559,7 +639,6 @@ class IncidenceSimplicialComplex:
         shared_faces_values = np.zeros(max_q + 1, dtype=int)
         n_simplices = self.num_simplices
 
-        # Iterate through all unique pairs of distinct simplices
         for i in range(n_simplices):
             for j in range(i + 1, n_simplices):
                 intersection = self.simplices[i].intersection(self.simplices[j])
@@ -608,7 +687,7 @@ class IncidenceSimplicialComplex:
 
         # Normalize by log10 of the number of occupied vertices
         normalization_factor = np.log10(num_occupied)
-        if normalization_factor == 0: # Should be caught by num_occupied <= 1 check
+        if normalization_factor == 0:
              return np.nan
 
         normalized_entropy = entropy_sum / normalization_factor
@@ -649,7 +728,6 @@ class IncidenceSimplicialComplex:
         node_params_dict = {}
 
         if max_q == -1:
-            # For q-graded parameters
             q_params_dict['FSV'] = GradedParameterSet(name='FSV', values=np.array([], dtype=int), q_max=max_q)
             q_params_dict['SSV'] = GradedParameterSet(name='SSV', values=np.array([], dtype=int), q_max=max_q)
             q_params_dict['TSV'] = GradedParameterSet(name='TSV', values=np.array([], dtype=float), q_max=max_q)
@@ -657,7 +735,6 @@ class IncidenceSimplicialComplex:
             q_params_dict['Simplex Count'] = GradedParameterSet(name='Simplex Count', values=np.array([], dtype=int), q_max=max_q)
             q_params_dict['Shared Faces Count'] = GradedParameterSet(name='Shared Faces Count', values=np.array([], dtype=int), q_max=max_q)
             
-            # For node-graded parameters
             node_params_dict['Topological Dimensionality'] = NodeParameterSet(name='Topological Dimensionality', values=np.array([]), node_ids=np.array([]))
             
             q_graded_params = GradedParameters(q_params_dict)
@@ -670,7 +747,6 @@ class IncidenceSimplicialComplex:
         q_params_dict['Simplex Count'] = self.simp_count()
         q_params_dict['Shared Faces Count'] = self.shared_faces_count()
         
-        # Node-graded parameters
         node_params_dict['Topological Dimensionality'] = self.topological_dimensionality()
         
         q_graded_params = GradedParameters(q_params_dict)
@@ -697,7 +773,6 @@ class IncidenceSimplicialComplex:
 
         if max_q == -1:
             for v_name in effective_vector_names_ordered:
-                # Determine dtype based on vector name for empty case
                 dtype = float if v_name == 'Topological Entropy' or v_name == 'TSV' else int
                 calculated_parameters[v_name] = GradedParameterSet(name=v_name, values=np.array([], dtype=dtype), q_max=max_q)
             
@@ -711,7 +786,6 @@ class IncidenceSimplicialComplex:
 
 
 
-    # --- Utility method retained from original ---
     @staticmethod
     def simplecies_to_incidence(simplices):
         """

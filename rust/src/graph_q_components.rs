@@ -50,7 +50,6 @@ impl CliqueManager {
 
 struct Dsu {
     parent: HashMap<CliqueId, CliqueId>,
-    // For root nodes:
     vertex_union_data: HashMap<CliqueId, BTreeSet<VertexId>>, // Root CliqueId -> Union of vertices
     clique_ids_in_component: HashMap<CliqueId, HashSet<CliqueId>>, // Root CliqueId -> Set of CliqueIds in this component
     size: HashMap<CliqueId, usize>, // For union by size heuristic
@@ -290,12 +289,6 @@ pub fn find_all_q_connected_components(
     let mut results_by_q: HashMap<isize, Vec<BTreeSet<VertexId>>> = HashMap::new();
     
     if k_max_actual == 0 {
-        // If graph_nodes is empty, k_max_actual will be 0. Loop for q will be empty. Correct.
-        // If graph_nodes is not empty, but k_max_actual is 0 (e.g. k_max_hint was 0 initially, and effective_k_max_hint also ended up 0, or no cliques at all),
-        // q_max will be -1. Loop for q will be empty. Correct.
-        // The Python code has a specific `if k_max_actual == 0 and len(graph_nodes) > 0: k_max_actual = 1`.
-        // My `effective_k_max_hint` logic and `enumerate_k_cliques_from_graph` aims to make `k_max_actual >= 1`
-        // if nodes exist and hint allows. If `k_max_actual` is still 0, it implies no 1-cliques could be formed or found.
         return results_by_q; 
     }
 

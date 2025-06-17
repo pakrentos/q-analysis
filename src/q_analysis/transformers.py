@@ -19,7 +19,7 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 import numpy as np
 from sklearn.base import BaseEstimator, TransformerMixin, ClusterMixin
 from itertools import combinations
-from .simplicial_complex import IncidenceSimplicialComplex
+from .simplicial_complex import SimplicialComplex
 from scipy import sparse
 from typing import Iterable
 
@@ -37,7 +37,7 @@ class GraphCliqueFilter(BaseEstimator, TransformerMixin):
             adj = x
             if self.threshold:
                 adj = self.threshold(x)
-            simps.append(IncidenceSimplicialComplex.from_adjacency_matrix(adj))
+            simps.append(SimplicialComplex.from_adjacency_matrix(adj))
         
         projector = SimplexProjection(q=self.q)
         adj_masks = projector.transform(simps)
@@ -96,25 +96,9 @@ class GradedParametersTransformer(BaseEstimator, TransformerMixin):
         self.fill_value = fill_value
 
     def fit(self, X, y=None):
-        """
-        Fit the transformer (no-op).
-        
-        Parameters
-        ----------
-        X : array-like of shape (n_samples, n_nodes, n_nodes)
-            Input adjacency matrices.
-            
-        y : Ignored
-            Not used, present for API consistency.
-            
-        Returns
-        -------
-        self : object
-            Returns self.
-        """
         return self
 
-    def transform(self, X: Iterable[IncidenceSimplicialComplex]):
+    def transform(self, X: Iterable[np.ndarray]):
         """
         Transform adjacency matrices into q-analysis metrics.
         
@@ -129,15 +113,26 @@ class GradedParametersTransformer(BaseEstimator, TransformerMixin):
             If flatten=True: Array of shape (n_samples, n_features) containing flattened q-metrics.
             If flatten=False: Array of shape (n_samples, n_orders, n_metrics) containing structured q-metrics.
         """
-        structure_vectors = [IncidenceSimplicialComplex.from_adjacency_matrix(adj).graded_parameters() for adj in X]
+        graded_parameters = [
+            SimplicialComplex.from_adjacency_matrix(adj)
+                .graded_parameters()
+            for adj in X
+        ]
         
+        if self.max_order is None:
+            max_order = max(param_set.get_max_order() for param_set in graded_parameters)
+        else:
+            max_order = self.max_order
+    
+        graded_parameters = np.array([
+            param_set.to_numpy(max_order=max_order, fill_value=self.fill_value)
+            for param_set in graded_parameters
+        ])
+            
         if self.flatten:
-            # Flatten the array to shape (n_samples, n_features)
-            # First remove any NaN values by replacing them with 0
-            structure_vectors = np.nan_to_num(structure_vectors, nan=0.0)
-            return structure_vectors.reshape(structure_vectors.shape[0], -1)
+            return graded_parameters.reshape(graded_parameters.shape[0], -1)
         
-        return structure_vectors
+        return graded_parameters
 
 class QConnectedComponents(BaseEstimator, TransformerMixin):
     def __init__(self, q_level):
@@ -149,7 +144,7 @@ class QConnectedComponents(BaseEstimator, TransformerMixin):
     def transform(self, X, y=None):
         X_labels = []
         for incidence_matrix in X:
-            complex = IncidenceSimplicialComplex(incidence_matrix)
+            complex = SimplicialComplex(incidence_matrix)
             _, labels = complex.q_connected_components_labeled(self.q_level)
             X_labels.append(labels)
         return np.array(X_labels)
