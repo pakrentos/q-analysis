@@ -7,7 +7,7 @@ name = "q-analysis"
 version = "0.1.0"
 description = "A package for Q-analysis of complex networks"
 readme = "README.MD"
-requires-python = "==3.10"
+requires-python = "<=3.10"
 authors = [
     {name = "Nikita Smirnov"}
 ]
