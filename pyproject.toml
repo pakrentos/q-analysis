@@ -1,13 +1,13 @@
 [build-system]
-requires = ["setuptools>=42", "wheel", "maturin==1.8.4"]
+requires = ["setuptools>=42", "wheel", "maturin==1.8.7"]
 build-backend = "maturin"
 
 [project]
 name = "q-analysis"
 version = "0.1.0"
 description = "A package for Q-analysis of complex networks"
-readme = "README.md"
-requires-python = ">=3.8"
+readme = "README.MD"
+requires-python = ">=3.11"
 authors = [
     {name = "Nikita Smirnov"}
 ]
