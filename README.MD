@@ -1,6 +1,6 @@
 # Q-analysis Package
 
-This package provides tools for performing Q-analysis on complex networks. It implements methods for constructing simplicial complexes, computing Q-analysis metrics, and includes statistical and visualization utilities. The core computations are accelerated with Rust, and the package provides scikit-learn compatible interfaces.
+This package provides tools for performing [Q-analysis](https://en.wikipedia.org/wiki/Q-analysis) on complex networks. It implements methods for constructing simplicial complexes, computing Q-analysis metrics, and includes statistical and visualization utilities. The core computations are accelerated with Rust, and the package provides scikit-learn compatible interfaces.
 
 ## Installation
 
