@@ -31,7 +31,7 @@ def consensus_statistic(
     max_order=None,
 ):
     """
-    Calculates the difference in Q-analysis vectors between consensus simplicial complexes
+    Calculates the difference in Q-analysis graded parameters between consensus simplicial complexes
     derived from two sets of adjacency matrices.
     """
     consensus_axis = 0

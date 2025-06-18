@@ -55,7 +55,7 @@ class GradedParameterSet:
 class GradedParameters:
     """
     Represents a collection of GradedParameterSet objects.
-    This is typically the result of computing multiple Q-analysis vectors.
+    This is typically the result of computing multiple Q-analysis graded parameters.
     """
     def __init__(self, parameters: dict[str, GradedParameterSet]):
         self.parameters = parameters
