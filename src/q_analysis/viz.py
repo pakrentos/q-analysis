@@ -26,6 +26,20 @@ def plot_q_analysis_vectors(structure_vectors_df, pvalues_df=None, **kwargs):
     sns.set_style("whitegrid")
     sns.set_palette("colorblind")
 
+    title_kwargs = {}
+    if 'title_pad' in kwargs:
+        title_kwargs['pad'] = kwargs.pop('title_pad')
+
+    subplots_adjust_kwargs = {}
+    for key in ['hspace', 'wspace']:
+        if key in kwargs:
+            subplots_adjust_kwargs[key] = kwargs.pop(key)
+    
+    if 'verbose' in kwargs:
+        verbose = kwargs.pop('verbose')
+    else:
+        verbose = False
+
     plot_parameters = dict(
         x='q', 
         y='Value', 
@@ -82,11 +96,14 @@ def plot_q_analysis_vectors(structure_vectors_df, pvalues_df=None, **kwargs):
                 x="q",
                 y="Value",
                 hue=hue,
+                verbose=verbose,
             )
             annotator.configure(test=None, text_format='star', loc='outside')
             annotator.set_pvalues(p_values)
             annotator.annotate()
             
 
-    g.set_titles("{col_name}")
+    g.set_titles("{col_name}", **title_kwargs)
     g.tight_layout()
+    if subplots_adjust_kwargs:
+        g.fig.subplots_adjust(**subplots_adjust_kwargs)
