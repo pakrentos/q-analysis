@@ -205,6 +205,14 @@ class SimplicialComplex:
         graph = nx.Graph(adj_matrix)
         cliques = [set(clique) for clique in nx.clique.find_cliques(graph)]
         return cls(cliques, underlying_graph_edges=list(graph.edges))
+    
+    @classmethod
+    def from_networkx(cls, graph):
+        """
+        Create a complex from a NetworkX graph by finding maximal cliques.
+        """
+        cliques = [set(clique) for clique in nx.clique.find_cliques(graph)]
+        return cls(cliques, underlying_graph_edges=list(graph.edges))
 
     @property
     def num_simplices(self):

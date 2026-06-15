@@ -2,3 +2,5 @@
 **target/
 **__pycache__/
 **.so
+dist/
+logs*/

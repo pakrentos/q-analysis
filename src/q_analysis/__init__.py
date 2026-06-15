@@ -19,6 +19,11 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 from .simplicial_complex import SimplicialComplex
 from .q_analysis import *
 from .datasets import load_dataset
+from .persistence import (
+    PersistentCommunities,
+    persistent_q_communities,
+    persistent_q_communities_from_edges,
+)
 
 if hasattr(q_analysis, "__all__"):
     __all__ = q_analysis.__all__
@@ -26,4 +31,7 @@ if hasattr(q_analysis, "__all__"):
 __all__ +=[
     'SimplicialComplex',
     'load_dataset',
+    'PersistentCommunities',
+    'persistent_q_communities',
+    'persistent_q_communities_from_edges',
 ]

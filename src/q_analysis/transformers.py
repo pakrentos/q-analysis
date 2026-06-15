@@ -22,6 +22,7 @@ from itertools import combinations
 from .simplicial_complex import SimplicialComplex
 from scipy import sparse
 from typing import Iterable
+from tqdm import tqdm
 
 class GraphCliqueFilter(BaseEstimator, TransformerMixin):
     def __init__(self, *, q=0, threshold=None):
@@ -90,10 +91,12 @@ class GradedParametersTransformer(BaseEstimator, TransformerMixin):
     flatten : bool
         Whether to flatten the output array.
     """
-    def __init__(self, flatten=False, max_order=None, fill_value=np.nan):
+    def __init__(self, flatten=False, max_order=None, fill_value=np.nan, metric_names=None, progress_bar=False):
         self.flatten = flatten
         self.max_order = max_order
         self.fill_value = fill_value
+        self.metric_names = metric_names
+        self.progress_bar = progress_bar
 
     def fit(self, X, y=None):
         return self
@@ -113,11 +116,19 @@ class GradedParametersTransformer(BaseEstimator, TransformerMixin):
             If flatten=True: Array of shape (n_samples, n_features) containing flattened q-metrics.
             If flatten=False: Array of shape (n_samples, n_orders, n_metrics) containing structured q-metrics.
         """
-        graded_parameters = [
-            SimplicialComplex.from_adjacency_matrix(adj)
-                .graded_parameters()
-            for adj in X
-        ]
+        X_iter = tqdm(X) if self.progress_bar else X
+        if isinstance(next(iter(X)), np.ndarray):
+            graded_parameters = [
+                SimplicialComplex.from_adjacency_matrix(adj)
+                .graded_parameters(self.metric_names)
+                for adj in X_iter
+            ]
+        else:
+            graded_parameters = [
+                SimplicialComplex.from_networkx(adj)
+                .graded_parameters(self.metric_names)
+                for adj in X_iter
+            ]
         
         if self.max_order is None:
             max_order = max(param_set.get_max_order() for param_set in graded_parameters)

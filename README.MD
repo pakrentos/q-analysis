@@ -73,6 +73,21 @@ plt.show()
 
 You can find other code snippets in scripts/
 
+### Persistent q-communities
+
+Track q-connected communities across an ascending edge-weight filtration of a
+distance matrix. Communities follow the elder rule: a community keeps its
+identity while it grows and dies when it merges into an older one; survivors get
+`death = inf`. Equal weights are processed as one filtration step, so
+quantizing the matrix (e.g. `matrix.round(2)`) directly trades resolution for speed.
+
+```python
+from q_analysis import persistent_q_communities
+
+result = persistent_q_communities(distance_matrix, max_q=10)  # max_q=None for all levels
+print(result.to_dataframe())  # q, birth, death, size, members per interval
+```
+
 ## Features
 
 - **Simplicial Complex Analysis**: Create simplicial complexes from adjacency matrices by finding maximal cliques.
@@ -81,6 +96,7 @@ You can find other code snippets in scripts/
   - Topological Entropy
   - Simplex Counts
   - Shared Faces Counts
+- **Persistent Q-Communities**: Incremental elder-rule persistence of q-connected components over edge-weight filtrations.
 - **Statistical Tools**: Includes utilities for network comparison and statistical analysis.
 - **Visualization**: Plot Q-analysis vectors and other topological properties.
 - **Scikit-learn Compatibility**: Provides transformers for network transformations compatible with scikit-learn pipelines.

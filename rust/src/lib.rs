@@ -1,13 +1,14 @@
 use hashbrown::hash_set::HashSet;
-use graph_q_components::find_all_q_connected_components;
-use std::cmp::Ordering;
 use std::collections::VecDeque;
-
-use std::collections::{BTreeSet, HashMap};
 
 use crate::types::*;
 
+mod bitset;
 mod graph_q_components;
+mod max_cliques;
+mod persistence;
+#[cfg(test)]
+mod persistence_tests;
 mod pybindings;
 #[cfg(test)]
 mod tests;
@@ -19,15 +20,6 @@ fn calculate_simplex_dimension(simplex: &Simplex) -> SimplexDimension {
         -1
     } else {
         simplex.len() as SimplexDimension - 1
-    }
-}
-
-pub fn compare_f64_nan_first(a: &f64, b: &f64) -> Ordering {
-    match (a.is_nan(), b.is_nan()) {
-        (false, false) => a.partial_cmp(b).unwrap(),
-        (true, false) => Ordering::Less,
-        (false, true) => Ordering::Greater,
-        (true, true) => Ordering::Equal,
     }
 }
 
@@ -224,88 +216,4 @@ pub fn find_hierarchical_q_components(simplices: Vec<Simplex>) -> Vec<Vec<HashSe
     }
 
     results
-}
-
-/// Calculates persistent q-connected components from a distance matrix and thresholds.
-pub fn calculate_persistent_q_components(
-    edges: Vec<(VertexId, VertexId, f64)>,
-    max_q: Option<usize>,
-) -> Vec<PersistenceEntry> {
-    if edges.is_empty() {
-        return Vec::new();
-    }
-
-    let mut sorted_edges = edges
-        .into_iter()
-        .filter(|(_, _, weight)| weight.is_finite())
-        .collect::<Vec<_>>();
-
-    sorted_edges
-        .sort_by(|(_, _, weight_a), (_, _, weight_b)| compare_f64_nan_first(weight_a, weight_b));
-
-    let mut persistence_results: Vec<PersistenceEntry> = Vec::new();
-    let mut active_components: HashMap<CanonicalComponentId, f64> = HashMap::new();
-    let mut adjacency_map: HashMap<VertexId, BTreeSet<VertexId>> = HashMap::new();
-
-    for current_edge in &sorted_edges {
-        adjacency_map
-            .entry(current_edge.0)
-            .and_modify(|set| {
-                set.insert(current_edge.1);
-            })
-            .or_insert(BTreeSet::from([current_edge.1]));
-
-        adjacency_map
-            .entry(current_edge.1)
-            .and_modify(|set| {
-                set.insert(current_edge.0);
-            })
-            .or_insert(BTreeSet::from([current_edge.0]));
-
-        let hierarchical_q_components_indices: HashSet<(isize, BTreeSet<VertexId>)> =
-            find_all_q_connected_components(&adjacency_map, max_q)
-                .into_iter()
-                .flat_map(|(key, vec_of_components)| {
-                    vec_of_components
-                        .into_iter()
-                        .map(move |btreeset| {
-                            (key, btreeset)
-                        })
-                })
-                .collect();
-
-        let (old_components, new_components): (HashSet<_>, HashSet<_>) =
-            hierarchical_q_components_indices
-                .into_iter()
-                .partition(|key| active_components.contains_key(key));
-
-        let (preserved_active_components, dead_components) = active_components
-            .clone()
-            .into_iter()
-            .partition(|(key, _value)| old_components.contains(key));
-
-        active_components = preserved_active_components;
-        for new_component in new_components.into_iter() {
-            active_components.insert(new_component, current_edge.2);
-        }
-
-        for ((q, component_vertices), dead_component_birth) in dead_components.into_iter() {
-            persistence_results.push((
-                (q, component_vertices.into_iter().collect()),
-                dead_component_birth,
-                current_edge.2,
-            ));
-        }
-    }
-
-    // Handle components that survive all thresholds
-    for ((q, component_vertices), dead_component_birth) in active_components.into_iter() {
-        persistence_results.push((
-            (q, component_vertices.into_iter().collect()),
-            dead_component_birth,
-            sorted_edges.last().unwrap().2,
-        ));
-    }
-
-    persistence_results
 }
